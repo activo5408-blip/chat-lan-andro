@@ -23,47 +23,63 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Extract Android project
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Extract Android project and locate root
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y unzip
           mkdir -p extracted
           unzip -q chatlan-android.zip -d extracted
-          echo "Files in archive:"
-          find extracted -maxdepth 3 -type f | head -100
-          WRAPPER="$(find extracted -type f -name gradlew -print -quit)"
-          if [ -n "$WRAPPER" ]; then
-            echo "GRADLE_WRAPPER=$WRAPPER" >> "$GITHUB_ENV"
-            chmod +x "$WRAPPER"
-            echo "PROJECT_DIR=$(dirname "$WRAPPER")" >> "$GITHUB_ENV"
-          else
-            BUILD_FILE="$(find extracted -type f -name build.gradle -o -name build.gradle.kts | head -1)"
-            if [ -z "$BUILD_FILE" ]; then
-              echo "ERROR: No gradlew or Gradle build file found in chatlan-android.zip."
-              exit 1
-            fi
-            echo "PROJECT_DIR=$(dirname "$BUILD_FILE")" >> "$GITHUB_ENV"
+          echo "Project files:"
+          find extracted -maxdepth 4 -type f | sort | head -150
+
+          SETTINGS="$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::No settings.gradle or settings.gradle.kts found in chatlan-android.zip"
+            exit 1
           fi
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Gradle project root: $PROJECT_DIR"
 
       - name: Build debug APK
+        shell: bash
         run: |
+          set -euo pipefail
           cd "$PROJECT_DIR"
-          if [ -n "${GRADLE_WRAPPER:-}" ]; then
-            ./gradlew --no-daemon assembleDebug
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon --stacktrace assembleDebug
           else
-            sudo apt-get install -y gradle
-            gradle --no-daemon assembleDebug
+            gradle --no-daemon --stacktrace assembleDebug
           fi
 
       - name: Locate APK
+        shell: bash
         run: |
+          set -euo pipefail
           find extracted -type f -name '*.apk' -print
-          test -n "$(find extracted -type f -name '*debug*.apk' -print -quit)" || test -n "$(find extracted -type f -name '*.apk' -print -quit)"
+          APK="$(find extracted -type f -path '*/build/outputs/apk/*/*.apk' -print -quit)"
+          if [ -z "$APK" ]; then
+            echo "::error::Build completed but no APK was found."
+            exit 1
+          fi
+          mkdir -p output
+          cp "$APK" output/Chat-LAN-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: chatlan-debug-apk
-          path: extracted/**/*.apk
+          path: output/Chat-LAN-debug.apk
           if-no-files-found: error
           retention-days: 14
