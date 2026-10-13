@@ -1,0 +1,69 @@
+name: Build Chat LAN Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'chatlan-android.zip'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Extract Android project
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          mkdir -p extracted
+          unzip -q chatlan-android.zip -d extracted
+          echo "Files in archive:"
+          find extracted -maxdepth 3 -type f | head -100
+          WRAPPER="$(find extracted -type f -name gradlew -print -quit)"
+          if [ -n "$WRAPPER" ]; then
+            echo "GRADLE_WRAPPER=$WRAPPER" >> "$GITHUB_ENV"
+            chmod +x "$WRAPPER"
+            echo "PROJECT_DIR=$(dirname "$WRAPPER")" >> "$GITHUB_ENV"
+          else
+            BUILD_FILE="$(find extracted -type f -name build.gradle -o -name build.gradle.kts | head -1)"
+            if [ -z "$BUILD_FILE" ]; then
+              echo "ERROR: No gradlew or Gradle build file found in chatlan-android.zip."
+              exit 1
+            fi
+            echo "PROJECT_DIR=$(dirname "$BUILD_FILE")" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_DIR"
+          if [ -n "${GRADLE_WRAPPER:-}" ]; then
+            ./gradlew --no-daemon assembleDebug
+          else
+            sudo apt-get install -y gradle
+            gradle --no-daemon assembleDebug
+          fi
+
+      - name: Locate APK
+        run: |
+          find extracted -type f -name '*.apk' -print
+          test -n "$(find extracted -type f -name '*debug*.apk' -print -quit)" || test -n "$(find extracted -type f -name '*.apk' -print -quit)"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatlan-debug-apk
+          path: extracted/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
